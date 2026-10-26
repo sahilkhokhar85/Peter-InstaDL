@@ -1,0 +1,17 @@
+[Unit]
+Description=Instagram Telegram Downloader Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these three lines for your VPS:
+User=YOUR_LINUX_USERNAME
+WorkingDirectory=/home/YOUR_LINUX_USERNAME/instagram-Downloader-bot-TDBotDev
+EnvironmentFile=/home/YOUR_LINUX_USERNAME/instagram-Downloader-bot-TDBotDev/.env
+ExecStart=/usr/bin/python3 bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

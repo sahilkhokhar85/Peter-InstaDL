@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: instagram-telegram-bot
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: PORT
+        value: "8080"
+      - key: INSTAGRAM_COOKIES
+        sync: false
