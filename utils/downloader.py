@@ -550,13 +550,36 @@ async def ytdlp_download(
     return out_path[0], desc_ref[0], qualities_ref[0]
 
 
-def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> str:
-    """Download the real Instagram cover (thumbnail) image for a post/reel URL.
+def _jpeg_size(path: str):
+    """Return (width, height) of a JPEG file, or (None, None) if it cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            if marker in (0xC0, 0xC1, 0xC2):
+                h = int.from_bytes(data[i + 5:i + 7], "big")
+                w = int.from_bytes(data[i + 7:i + 9], "big")
+                return w, h
+            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    except Exception:
+        pass
+    return None, None
 
-    Blocking function: call it via loop.run_in_executor(). Saves a JPEG at out_path.
-    Raises RuntimeError if no cover could be fetched.
+
+def get_cover_options(url: str, uid: int = 0) -> list:
+    """Return every cover/thumbnail size Instagram offers for a post/reel URL.
+
+    Blocking function: call it via loop.run_in_executor().
+    Returns a list of {"url", "width", "height"} dicts, highest resolution first.
     """
-    import urllib.request
     import yt_dlp
 
     cookies = _get_cookies_path(uid, url)
@@ -572,33 +595,56 @@ def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> str:
     if not info:
         raise RuntimeError("Could not read Instagram media info for cover.")
 
-    cover_url = None
-    thumbs = [t for t in (info.get("thumbnails") or []) if t.get("url")]
-    if thumbs:
-        thumbs.sort(key=lambda t: (t.get("width") or 0) * (t.get("height") or 0))
-        cover_url = thumbs[-1]["url"]
-    if not cover_url:
-        cover_url = info.get("thumbnail")
-    if not cover_url:
-        raise RuntimeError("Instagram did not return a cover image URL.")
+    options, seen = [], set()
+    for t in (info.get("thumbnails") or []):
+        t_url = t.get("url")
+        if not t_url or t_url in seen:
+            continue
+        seen.add(t_url)
+        options.append({"url": t_url, "width": t.get("width"), "height": t.get("height")})
+
+    main_url = info.get("thumbnail")
+    if main_url and main_url not in seen:
+        options.append({"url": main_url, "width": info.get("width"), "height": info.get("height")})
+
+    if not options:
+        raise RuntimeError("Instagram did not return any cover image.")
+
+    # Highest resolution first (unknown sizes go last, keeping their original order).
+    options.sort(key=lambda o: (o["width"] or 0) * (o["height"] or 0), reverse=True)
+    return options
+
+
+def download_cover_image(cover_url: str, out_path: str) -> dict:
+    """Download one cover image to out_path (original JPEG bytes kept untouched).
+
+    Blocking function. Non-JPEG images are converted to JPEG with ffmpeg.
+    Returns {"bytes", "width", "height"} (width/height may be None).
+    """
+    import urllib.request
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    raw_path = out_path + ".raw"
     req = urllib.request.Request(cover_url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=20) as resp, open(raw_path, "wb") as f:
-        f.write(resp.read())
-
-    if not os.path.exists(raw_path) or os.path.getsize(raw_path) == 0:
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw_bytes = resp.read()
+    if not raw_bytes:
         raise RuntimeError("Downloaded cover image is empty.")
 
-    # Normalise to JPEG (Telegram-friendly); fall back to raw bytes if ffmpeg fails.
-    try:
-        from utils.media_processor import run_ffmpeg
-        run_ffmpeg(["-y", "-i", raw_path, out_path])
+    if raw_bytes[:3] == b"\xff\xd8\xff":
+        with open(out_path, "wb") as f:
+            f.write(raw_bytes)
+    else:
+        raw_path = out_path + ".raw"
+        with open(raw_path, "wb") as f:
+            f.write(raw_bytes)
+        try:
+            from utils.media_processor import run_ffmpeg
+            run_ffmpeg(["-y", "-i", raw_path, out_path])
+        finally:
+            if os.path.exists(raw_path):
+                os.remove(raw_path)
         if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-            raise RuntimeError("ffmpeg produced empty cover.")
-        os.remove(raw_path)
-    except Exception:
-        os.replace(raw_path, out_path)
+            raise RuntimeError("Could not convert cover image to JPEG.")
 
-    return out_path
+    width, height = _jpeg_size(out_path)
+    return {"bytes": os.path.getsize(out_path), "width": width, "height": height}

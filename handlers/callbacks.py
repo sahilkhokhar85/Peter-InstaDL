@@ -6,7 +6,7 @@ import uuid
 import shutil
 import asyncio
 import logging
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.ext import ContextTypes
 
 from database import task_manager, session_manager, MediaSession
@@ -14,9 +14,10 @@ from utils.buttons import (
     build_video_action_keyboard,
     build_quality_keyboard,
     build_rotation_keyboard,
+    build_cover_keyboard,
 )
 from utils.progress import MovingDotAnimation
-from utils.downloader import ytdlp_download, fetch_instagram_cover
+from utils.downloader import ytdlp_download, get_cover_options, download_cover_image
 from utils import media_processor
 
 logger = logging.getLogger("handlers.callbacks")
@@ -136,8 +137,116 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
 
     await query.answer()
 
+    # Cover actions (thumbnail + quality buttons) use their own flow
+    if action == "thumb" or (action.startswith("cvq") and action[3:].isdigit()):
+        index = int(action[3:]) if action != "thumb" else 0
+        asyncio.create_task(run_cover_action(query, session, index))
+        return
+
     # Process background action
     asyncio.create_task(run_media_action(update, query, session, action))
+
+
+COVER_CACHE: dict = {}  # session_id -> list of cover size options (in memory)
+
+
+def _cache_cover_options(session_id: str, options: list):
+    if len(COVER_CACHE) >= 200:
+        COVER_CACHE.pop(next(iter(COVER_CACHE)))
+    COVER_CACHE[session_id] = options
+
+
+async def run_cover_action(query, session: MediaSession, index: int = 0):
+    """Send the Instagram cover: photo + original file + download link + quality buttons.
+
+    index 0 = highest quality. Other indexes come from the quality buttons.
+    """
+    status_msg = None
+    tmp_dir = None
+    loop = asyncio.get_running_loop()
+
+    try:
+        status_msg = await query.message.reply_text("🖼 Fetching cover…")
+
+        options = COVER_CACHE.get(session.session_id)
+        if not options:
+            if not session.url:
+                raise RuntimeError("Media URL unknown; cannot fetch cover.")
+            options = await loop.run_in_executor(None, get_cover_options, session.url, session.uid)
+            _cache_cover_options(session.session_id, options)
+
+        index = max(0, min(index, len(options) - 1))
+        chosen = options[index]
+
+        tmp_dir = os.path.join("/tmp", "ytdlp_downloads", f"cover_{uuid.uuid4().hex[:8]}")
+        out_file = os.path.join(tmp_dir, "cover.jpg")
+        meta = await loop.run_in_executor(None, download_cover_image, chosen["url"], out_file)
+
+        w = meta.get("width") or chosen.get("width")
+        h = meta.get("height") or chosen.get("height")
+        size_txt = f"{w}x{h}" if w and h else "unknown size"
+        kb_size = meta["bytes"] / 1024
+        tag = " (best quality)" if index == 0 else ""
+
+        if status_msg:
+            try:
+                await status_msg.edit_text("📤 Uploading…")
+            except Exception:
+                pass
+
+        with open(out_file, "rb") as f:
+            await query.message.reply_photo(photo=f, caption=f"🖼 Cover {size_txt}{tag}")
+        with open(out_file, "rb") as f:
+            await query.message.reply_document(
+                document=f,
+                filename=f"cover_{size_txt}.jpg",
+                caption=f"📁 Original file • {kb_size:.0f} KB",
+            )
+
+        link_text = (
+            f"🔗 Download link ({size_txt}, {kb_size:.0f} KB){tag}:\n{chosen['url']}\n\n"
+            "Want another quality? Tap a size below."
+        )
+        await query.message.reply_text(
+            link_text[:4000],
+            reply_markup=build_cover_keyboard(session.session_id, options, index),
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
+    except Exception as e:
+        logger.error(f"Cover action failed for session {session.session_id}: {e}", exc_info=True)
+        # Fallback: frame from the downloaded video (no URL/quality options available)
+        fallback_ok = False
+        try:
+            if session.file_path and os.path.exists(session.file_path):
+                tmp_dir = tmp_dir or os.path.join("/tmp", "ytdlp_downloads", f"cover_{uuid.uuid4().hex[:8]}")
+                os.makedirs(tmp_dir, exist_ok=True)
+                frame_file = os.path.join(tmp_dir, "frame.jpg")
+                await loop.run_in_executor(None, media_processor.extract_thumbnail, session.file_path, frame_file)
+                if os.path.exists(frame_file) and os.path.getsize(frame_file) > 0:
+                    with open(frame_file, "rb") as f:
+                        await query.message.reply_photo(
+                            photo=f,
+                            caption="🖼 Couldn't fetch the Instagram cover, so this is a frame from the video.",
+                        )
+                    fallback_ok = True
+        except Exception as fb_err:
+            logger.error(f"Cover fallback failed for session {session.session_id}: {fb_err}")
+        if not fallback_ok:
+            try:
+                await query.message.reply_text("❌ Unable to fetch the cover. Please try again.")
+            except Exception:
+                pass
+
+    finally:
+        session.is_processing = False
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def run_media_action(update: Update, query, session: MediaSession, action: str):
@@ -242,20 +351,6 @@ async def run_media_action(update: Update, query, session: MediaSession, action:
                     if not os.path.exists(out_file) or os.path.getsize(out_file) == 0:
                         raise RuntimeError("Rotated video output file is missing or empty.")
 
-                elif action == "thumb":
-                    out_file = os.path.join(temp_dir, f"thumb_{uuid.uuid4().hex[:6]}.jpg")
-                    got_cover = False
-                    if session.url:
-                        try:
-                            await loop.run_in_executor(None, fetch_instagram_cover, session.url, out_file, session.uid)
-                            got_cover = os.path.exists(out_file) and os.path.getsize(out_file) > 0
-                        except Exception as cover_err:
-                            logger.warning(f"Real cover fetch failed ({cover_err}); falling back to video frame.")
-                    if not got_cover:
-                        await loop.run_in_executor(None, media_processor.extract_thumbnail, session.file_path, out_file)
-
-                    if not os.path.exists(out_file) or os.path.getsize(out_file) == 0:
-                        raise RuntimeError("Thumbnail output file is missing or empty.")
 
         # Processing completed successfully; transition status to 📤 Uploading… before sending to Telegram
         if animator:
@@ -276,10 +371,6 @@ async def run_media_action(update: Update, query, session: MediaSession, action:
                         audio=f,
                         title=base_name[:40],
                         filename=f"{base_name[:30]}.mp3",
-                    )
-                elif action == "thumb":
-                    await query.message.reply_photo(
-                        photo=f,
                     )
                 else:
                     await query.message.reply_video(

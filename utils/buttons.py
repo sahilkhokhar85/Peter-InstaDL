@@ -140,3 +140,22 @@ def build_rotation_keyboard(session_id: str) -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(buttons)
+
+
+def build_cover_keyboard(session_id: str, options: list, current: int = 0) -> InlineKeyboardMarkup:
+    """Inline keyboard listing every available cover size (2 per row). Current one is marked."""
+    rows, row = [], []
+    for i, opt in enumerate(options[:12]):
+        w, h = opt.get("width"), opt.get("height")
+        label = f"{w}x{h}" if w and h else f"Size {i + 1}"
+        if i == 0:
+            label = f"⭐ {label}"
+        if i == current:
+            label = f"✅ {label}"
+        row.append(make_button(label, callback_data=f"act_{session_id}_cvq{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
