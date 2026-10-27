@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 # Change these three lines for your VPS:
 User=YOUR_LINUX_USERNAME
-WorkingDirectory=/home/YOUR_LINUX_USERNAME/instagram-Downloader-bot-TDBotDev
-EnvironmentFile=/home/YOUR_LINUX_USERNAME/instagram-Downloader-bot-TDBotDev/.env
+WorkingDirectory=/home/YOUR_LINUX_USERNAME/Peter-InstaDL
+EnvironmentFile=/home/YOUR_LINUX_USERNAME/Peter-InstaDL/.env
 ExecStart=/usr/bin/python3 bot.py
 Restart=always
 RestartSec=5

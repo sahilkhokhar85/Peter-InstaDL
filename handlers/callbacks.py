@@ -107,9 +107,9 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
     elif action == "caption":
         raw_caption = (session.caption or "").strip()
         if raw_caption:
-            formatted_caption = f"{raw_caption}\n\n💬By : @TDBotDevZ"
+            formatted_caption = f"{raw_caption}\n\n💬By : @RudraBlaze"
         else:
-            formatted_caption = "no caption\n\n💬By : @TDBotDevZ"
+            formatted_caption = "no caption\n\n💬By : @RudraBlaze"
 
         try:
             if not session.telegram_chat_id or not session.telegram_message_id:

@@ -20,11 +20,10 @@ def make_button(text: str, callback_data: str = None, url: str = None, style: st
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     """Build /start main menu inline keyboard with PRIMARY (BLUE) buttons."""
-    yt_url = config.YOUTUBE_CHANNEL_URL or "https://youtube.com"
+    contact_url = config.CONTACT_URL or "https://t.me/RudraBlaze"
     buttons = [
         [
-            make_button("🔔 Updates", url="https://t.me/TDBotDevZ", style="primary"),
-            make_button("▶️ YouTube", url=yt_url, style="primary"),
+            make_button("📩 Contact", url=contact_url, style="primary"),
         ],
         [
             make_button("❓ Help", callback_data="start_help", style="primary"),

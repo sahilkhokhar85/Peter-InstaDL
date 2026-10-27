@@ -24,12 +24,13 @@ START_TEXT = os.getenv(
 )
 START_IMAGE = os.getenv("START_IMAGE", "")
 FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL", "https://cdn.phototourl.com/free/2026-09-17-80d35211-554a-4548-8bc4-a0e18dfa54f5.png").strip()
-YOUTUBE_CHANNEL_URL = os.getenv("YOUTUBE_CHANNEL_URL", "https://youtube.com/@tdbotdev?si=ue8vF4BMSaH1m_zH").strip()
+CONTACT_URL = os.getenv("CONTACT_URL", "https://t.me/RudraBlaze").strip()
 
 # Telegram Bot commands list for auto-registration on startup
 BOT_COMMANDS = [
-    ("start", "Start the bot and view instructions"),
-    ("settings", "Configure video quality and download options"),
-    ("cancel", "Cancel current active download task"),
-    ("bsettings", "Admin settings for global cookie management"),
+    ("help", "❓ How to use the bot"),
+    ("start", "🚀 Start the bot and view instructions"),
+    ("settings", "⚙️ Configure video quality and download options"),
+    ("cancel", "🛑 Cancel current active download task"),
+    ("bsettings", "🔐 Admin settings for global cookie management"),
 ]

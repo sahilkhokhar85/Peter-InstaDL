@@ -46,7 +46,7 @@ ABOUT_TEXT = (
     "A simple and powerful Instagram media downloader designed to make downloading fast and easy.\n"
     "</blockquote>\n\n"
     "⚡ <b>Simple</b> • <b>Fast</b> • <b>Powerful</b>\n\n"
-    "<blockquote>🌩️ Provided by <a href=\"https://t.me/TDBotDevZ\">@TDBotDevZ</a></blockquote>"
+    "<blockquote>🌩️ Provided by <a href=\"https://t.me/RudraBlaze\">@RudraBlaze</a></blockquote>"
 )
 
 
@@ -57,7 +57,7 @@ def get_start_text(first_name: str) -> str:
         f"<b>✈️ How to use:</b>\n\n"
         f"<blockquote>Send an Instagram Reel, Post, Video, or Story link and the bot will automatically process the content and provide the available download options.</blockquote>\n\n"
         f"⚡ <b>Simple</b> • <b>Fast</b> • <b>Powerful</b>\n\n"
-        f"<blockquote>🌩️ Provided by <a href=\"https://t.me/TDBotDevZ\">@TDBotDevZ</a></blockquote>"
+        f"<blockquote>🌩️ Provided by <a href=\"https://t.me/RudraBlaze\">@RudraBlaze</a></blockquote>"
     )
 
 

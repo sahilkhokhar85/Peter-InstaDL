@@ -167,6 +167,7 @@ def main():
     app = Application.builder().token(token).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", start_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("bSettings", bsettings_command))
