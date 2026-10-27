@@ -6,7 +6,7 @@ import uuid
 import shutil
 import asyncio
 import logging
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.ext import ContextTypes
 
 from database import task_manager, session_manager, MediaSession
@@ -145,6 +145,7 @@ async def run_media_action(update: Update, query, session: MediaSession, action:
     temp_dir = os.path.dirname(session.file_path) if session.file_path else "/tmp"
     base_name = os.path.splitext(os.path.basename(session.file_path))[0] if session.file_path else "media"
     out_file = None
+    cover_info = None
     status_msg = None
     animator = None
 
@@ -247,7 +248,7 @@ async def run_media_action(update: Update, query, session: MediaSession, action:
                     got_cover = False
                     if session.url:
                         try:
-                            await loop.run_in_executor(None, fetch_instagram_cover, session.url, out_file, session.uid)
+                            cover_info = await loop.run_in_executor(None, fetch_instagram_cover, session.url, out_file, session.uid)
                             got_cover = os.path.exists(out_file) and os.path.getsize(out_file) > 0
                         except Exception as cover_err:
                             logger.warning(f"Real cover fetch failed ({cover_err}); falling back to video frame.")
@@ -281,6 +282,28 @@ async def run_media_action(update: Update, query, session: MediaSession, action:
                     await query.message.reply_photo(
                         photo=f,
                     )
+                    if cover_info:
+                        w, h = cover_info.get("width"), cover_info.get("height")
+                        size_txt = f"{w}x{h}" if w and h else "unknown"
+                        kb = cover_info.get("bytes", 0) / 1024
+                        lines = [
+                            "🖼 Cover source (Instagram)",
+                            f"Resolution: {size_txt}",
+                            f"Original size: {kb:.0f} KB",
+                            "",
+                            "Selected URL (highest quality):",
+                            cover_info["url"],
+                        ]
+                        others = cover_info.get("others") or []
+                        if others:
+                            lines += ["", "Other available sizes:"]
+                            for ow, oh, ourl in others[:3]:
+                                lines.append(f"{ow}x{oh}: {ourl}")
+                        info_text = "\n".join(lines)[:4000]
+                        await query.message.reply_text(
+                            info_text,
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        )
                 else:
                     await query.message.reply_video(
                         video=f,
