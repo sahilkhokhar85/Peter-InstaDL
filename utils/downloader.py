@@ -550,10 +550,35 @@ async def ytdlp_download(
     return out_path[0], desc_ref[0], qualities_ref[0]
 
 
-def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> str:
+def _jpeg_size(path: str):
+    """Return (width, height) of a JPEG file, or (None, None) if it cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            if marker in (0xC0, 0xC1, 0xC2):
+                h = int.from_bytes(data[i + 5:i + 7], "big")
+                w = int.from_bytes(data[i + 7:i + 9], "big")
+                return w, h
+            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    except Exception:
+        pass
+    return None, None
+
+
+def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> dict:
     """Download the real Instagram cover (thumbnail) image for a post/reel URL.
 
-    Blocking function: call it via loop.run_in_executor(). Saves a JPEG at out_path.
+    Blocking function: call it via loop.run_in_executor(). Saves a JPEG at out_path
+    and returns a dict: {"url", "width", "height", "bytes", "others": [(w, h, url), ...]}.
     Raises RuntimeError if no cover could be fetched.
     """
     import urllib.request
@@ -572,23 +597,28 @@ def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> str:
     if not info:
         raise RuntimeError("Could not read Instagram media info for cover.")
 
-    cover_url = None
     thumbs = [t for t in (info.get("thumbnails") or []) if t.get("url")]
-    if thumbs:
-        thumbs.sort(key=lambda t: (t.get("width") or 0) * (t.get("height") or 0))
-        cover_url = thumbs[-1]["url"]
-    if not cover_url:
-        cover_url = info.get("thumbnail")
+    thumbs.sort(key=lambda t: (t.get("width") or 0) * (t.get("height") or 0))
+
+    cover_url = thumbs[-1]["url"] if thumbs else info.get("thumbnail")
     if not cover_url:
         raise RuntimeError("Instagram did not return a cover image URL.")
+
+    others = [
+        (t.get("width"), t.get("height"), t["url"])
+        for t in reversed(thumbs)
+        if t["url"] != cover_url
+    ]
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     raw_path = out_path + ".raw"
     req = urllib.request.Request(cover_url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=20) as resp, open(raw_path, "wb") as f:
-        f.write(resp.read())
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw_bytes = resp.read()
+    with open(raw_path, "wb") as f:
+        f.write(raw_bytes)
 
-    if not os.path.exists(raw_path) or os.path.getsize(raw_path) == 0:
+    if not raw_bytes:
         raise RuntimeError("Downloaded cover image is empty.")
 
     # Normalise to JPEG (Telegram-friendly); fall back to raw bytes if ffmpeg fails.
@@ -601,4 +631,11 @@ def fetch_instagram_cover(url: str, out_path: str, uid: int = 0) -> str:
     except Exception:
         os.replace(raw_path, out_path)
 
-    return out_path
+    width, height = _jpeg_size(out_path)
+    return {
+        "url": cover_url,
+        "width": width,
+        "height": height,
+        "bytes": len(raw_bytes),
+        "others": others,
+    }
