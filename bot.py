@@ -41,6 +41,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("instagram_bot")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 TEMPORARY_FILES_CLEANUP_QUEUE = []
 
