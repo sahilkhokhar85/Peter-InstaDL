@@ -23,6 +23,7 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
     contact_url = config.CONTACT_URL or "https://t.me/RudraBlaze"
     buttons = [
         [
+            make_button("📢 Updates", url="https://t.me/ChillFlizX", style="primary"),
             make_button("📩 Contact", url=contact_url, style="primary"),
         ],
         [
