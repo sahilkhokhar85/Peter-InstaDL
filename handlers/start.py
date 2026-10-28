@@ -8,7 +8,7 @@ import os
 import uuid
 import html
 import shutil
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.ext import ContextTypes
 
 import config
@@ -111,6 +111,7 @@ async def send_start_screen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=start_text,
         reply_markup=kb,
         parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
     )
 
 
@@ -141,7 +142,7 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if query.message.caption:
                 await query.edit_message_caption(caption=HELP_TEXT, reply_markup=kb, parse_mode="HTML")
             else:
-                await query.edit_message_text(text=HELP_TEXT, reply_markup=kb, parse_mode="HTML")
+                await query.edit_message_text(text=HELP_TEXT, reply_markup=kb, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         except Exception:
             pass
 
@@ -151,7 +152,7 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if query.message.caption:
                 await query.edit_message_caption(caption=ABOUT_TEXT, reply_markup=kb, parse_mode="HTML")
             else:
-                await query.edit_message_text(text=ABOUT_TEXT, reply_markup=kb, parse_mode="HTML")
+                await query.edit_message_text(text=ABOUT_TEXT, reply_markup=kb, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         except Exception:
             pass
 
@@ -162,7 +163,7 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if query.message.caption:
                 await query.edit_message_caption(caption=start_text, reply_markup=kb, parse_mode="HTML")
             else:
-                await query.edit_message_text(text=start_text, reply_markup=kb, parse_mode="HTML")
+                await query.edit_message_text(text=start_text, reply_markup=kb, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         except Exception:
             pass
 
