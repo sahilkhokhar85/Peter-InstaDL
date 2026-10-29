@@ -78,6 +78,30 @@ async def user_settings_callback_handler(update: Update, context: ContextTypes.D
         text, keyboard = build_user_settings_menu(uid)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
+    elif data == "usrset_format_menu":
+        current = users_db.get_settings(uid).get("video_format", "mp4")
+        text = (
+            "🎞 *Select Video Format:*\n\n"
+            "Videos will be sent as a video in this format.\n"
+            "_MP4 plays everywhere. MKV is kept as-is without quality loss, "
+            "but Telegram may show it as a file instead of a playable video._"
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                make_button(("✅ " if current == "mp4" else "") + "MP4", callback_data="usrset_set_format_mp4"),
+                make_button(("✅ " if current == "mkv" else "") + "MKV", callback_data="usrset_set_format_mkv"),
+            ],
+            [make_button("🔙 Back", callback_data="usrset_main_menu", style="success")],
+        ])
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+    elif data.startswith("usrset_set_format_"):
+        f_val = data.replace("usrset_set_format_", "")
+        if f_val in ("mp4", "mkv"):
+            users_db.update_settings(uid, {"video_format": f_val})
+        text, keyboard = build_user_settings_menu(uid)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
     elif data == "usrset_cleanup_menu":
         text = "🧹 *Select Auto-Cleanup Timer:*\n\nControls how long orphan unattached temporary download files are retained on the server after processing."
         kb = InlineKeyboardMarkup([

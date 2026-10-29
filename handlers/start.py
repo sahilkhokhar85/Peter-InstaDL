@@ -15,6 +15,7 @@ import config
 from database import task_manager, session_manager, users_db
 from utils.buttons import build_video_action_keyboard, build_start_keyboard, build_start_back_keyboard
 from utils.downloader import ytdlp_download
+from utils import media_processor
 from .force_sub import check_force_sub
 
 logger = logging.getLogger("handlers.start")
@@ -215,6 +216,22 @@ async def handle_url_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     asyncio.create_task(process_download(url, update, status_msg, uid, user_mention))
 
 
+async def _remux_to_mkv(file_path: str) -> str:
+    """Remux a video into MKV without re-encoding. Returns the new path, or the old one on failure."""
+    mkv_path = os.path.splitext(file_path)[0] + ".mkv"
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, media_processor.run_ffmpeg, [
+            "-y", "-i", file_path, "-map", "0:v:0", "-map", "0:a?", "-c", "copy", mkv_path,
+        ])
+        if os.path.exists(mkv_path) and os.path.getsize(mkv_path) > 0:
+            os.remove(file_path)
+            return mkv_path
+    except Exception as e:
+        logger.warning(f"MKV remux failed, sending original file: {e}")
+    return file_path
+
+
 async def process_download(
     url: str,
     update: Update,
@@ -273,6 +290,11 @@ async def process_download(
             await status_msg.edit_text("📤 Preparing media…")
         except Exception:
             pass
+
+        # Apply the user's preferred video format (Settings -> Video Format)
+        if ext in VIDEO_EXTENSIONS and ext != ".mkv" and users_db.get_settings(uid).get("video_format", "mp4") == "mkv":
+            file_path = await _remux_to_mkv(file_path)
+            ext = os.path.splitext(file_path)[1].lower()
 
         session_id = uuid.uuid4().hex[:8]
         media_type = "video" if ext in VIDEO_EXTENSIONS else "photo"

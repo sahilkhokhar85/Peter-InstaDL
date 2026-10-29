@@ -52,12 +52,14 @@ def build_user_settings_menu(uid: int) -> tuple[str, InlineKeyboardMarkup]:
     dq_label = "Best Available" if dq == "best" else dq
     dm_label = "✅ Fixed Quality" if dm == "fixed" else "🎛 Manual Selection"
     ct_label = "♾ Never" if ct == 0 else f"{ct} Minutes"
+    vf_label = "MKV" if s.get("video_format", "mp4") == "mkv" else "MP4"
 
     text = (
         "⚙️ *User Settings*\n\n"
         f"🎬 *Default Video Quality:* `{dq_label}`\n"
         f"🔁 *Download Mode:* `{dm_label}`\n"
-        f"🧹 *Cleanup Timer:* `{ct_label}`\n\n"
+        f"🧹 *Cleanup Timer:* `{ct_label}`\n"
+        f"🎞 *Video Format:* `{vf_label}`\n\n"
         "_Select an option below to customize your preferences:_"
     )
 
@@ -65,6 +67,7 @@ def build_user_settings_menu(uid: int) -> tuple[str, InlineKeyboardMarkup]:
         [make_button(f"🎬 Default Video Quality ({dq_label})", callback_data="usrset_quality_menu")],
         [make_button(f"🔁 Download Mode ({dm_label})", callback_data="usrset_mode_menu")],
         [make_button(f"🧹 Cleanup Timer ({ct_label})", callback_data="usrset_cleanup_menu")],
+        [make_button(f"🎞 Video Format ({vf_label})", callback_data="usrset_format_menu")],
         [make_button("❌ Close", callback_data="usrset_close", style="danger")],
     ])
 
@@ -101,10 +104,6 @@ def build_video_action_keyboard(session_id: str) -> InlineKeyboardMarkup:
         ],
         [
             make_button("🖼 Send with Cover", callback_data=f"act_{session_id}_sendcover"),
-        ],
-        [
-            make_button("📁 Send as MP4", callback_data=f"act_{session_id}_sendmp4"),
-            make_button("📁 Send as MKV", callback_data=f"act_{session_id}_sendmkv"),
         ],
         [
             make_button("🗑 Remove buttons", callback_data=f"act_{session_id}_remove", style="danger"),

@@ -4,7 +4,6 @@ Media action inline button callback query handlers.
 import os
 import uuid
 import html
-import re
 import subprocess
 import shutil
 import asyncio
@@ -12,7 +11,7 @@ import logging
 from telegram import Update, LinkPreviewOptions
 from telegram.ext import ContextTypes
 
-from database import task_manager, session_manager, MediaSession
+from database import task_manager, session_manager, users_db, MediaSession
 from utils.buttons import (
     build_video_action_keyboard,
     build_quality_keyboard,
@@ -104,7 +103,9 @@ def embed_cover_first_frame(video: str, cover: str, dst: str) -> str:
         args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
         if has_audio:
             args += ["-c:a", "aac", "-b:a", "128k"]
-        args += ["-movflags", "+faststart", dst]
+        if dst.lower().endswith(".mp4"):
+            args += ["-movflags", "+faststart"]
+        args.append(dst)
 
         media_processor.run_ffmpeg(args)
         if os.path.exists(dst) and os.path.getsize(dst) > 0:
@@ -112,31 +113,6 @@ def embed_cover_first_frame(video: str, cover: str, dst: str) -> str:
     except Exception as e:
         logger.warning(f"Embedding cover as first frame failed ({e}).")
     return ""
-
-
-def safe_file_stem(title: str, default: str = "video") -> str:
-    """Make a safe, short file name stem from a media title."""
-    stem = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "", title or "").strip()
-    stem = re.sub(r"\s+", " ", stem)[:60].strip()
-    return stem or default
-
-
-def make_document_copy(src: str, dst: str, ext: str) -> str:
-    """Remux the video into mp4 or mkv without re-encoding (same quality)."""
-    args = [
-        "-y", "-i", src,
-        "-map", "0:v:0", "-map", "0:a?",
-        "-c", "copy",
-        "-map_metadata", "-1",
-        "-metadata", f"comment={uuid.uuid4().hex}",
-    ]
-    if ext == "mp4":
-        args += ["-movflags", "+faststart"]
-    args.append(dst)
-    media_processor.run_ffmpeg(args)
-    if not os.path.exists(dst) or os.path.getsize(dst) == 0:
-        raise RuntimeError(f"Could not create {ext} file.")
-    return dst
 
 
 def make_unique_video_copy(src: str, dst: str) -> str:
@@ -152,9 +128,7 @@ def make_unique_video_copy(src: str, dst: str) -> str:
             "-c", "copy",
             "-map_metadata", "-1",
             "-metadata", f"comment={uuid.uuid4().hex}",
-            "-movflags", "+faststart",
-            dst,
-        ])
+        ] + (["-movflags", "+faststart"] if dst.lower().endswith(".mp4") else []) + [dst])
         if os.path.exists(dst) and os.path.getsize(dst) > 0:
             return dst
     except Exception as e:
@@ -275,7 +249,7 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
     await query.answer()
 
     # Send the video again with a custom thumbnail / cover
-    if action in ("sendthumb", "sendcover", "sendmp4", "sendmkv"):
+    if action in ("sendthumb", "sendcover"):
         with_caption = message_has_caption(query.message)
         asyncio.create_task(run_send_with_action(query, session, action, with_caption))
         return
@@ -393,14 +367,15 @@ async def run_cover_action(query, session: MediaSession, index: int = 0):
 
 
 async def run_send_with_action(query, session: MediaSession, action: str, with_caption: bool):
-    """Send the video again as: thumbnail / cover version, or as an MP4 / MKV file.
+    """Send the video again with the Instagram cover as thumbnail, or as thumbnail + cover.
 
     The bold caption is attached only if the Caption button was used on the video message.
+    The container follows the user's Settings -> Video Format (MP4 / MKV).
     """
     status_msg = None
     tmp_dir = os.path.join("/tmp", "ytdlp_downloads", f"send_{uuid.uuid4().hex[:8]}")
     loop = asyncio.get_running_loop()
-    needs_cover = action in ("sendthumb", "sendcover")
+    ext = "mkv" if users_db.get_settings(session.uid).get("video_format", "mp4") == "mkv" else "mp4"
 
     try:
         status_msg = await query.message.reply_text("⏳ Preparing…")
@@ -428,8 +403,7 @@ async def run_send_with_action(query, session: MediaSession, action: str, with_c
         os.makedirs(tmp_dir, exist_ok=True)
         cover_file = os.path.join(tmp_dir, "cover.jpg")
 
-        # Best Instagram cover; thumbnail/cover modes fall back to a video frame,
-        # file modes just skip the thumbnail if no cover is available.
+        # Best Instagram cover; fall back to a frame from the video itself
         got_cover = False
         try:
             if session.url:
@@ -440,85 +414,44 @@ async def run_send_with_action(query, session: MediaSession, action: str, with_c
                 await loop.run_in_executor(None, download_cover_image, options[0]["url"], cover_file)
                 got_cover = os.path.exists(cover_file) and os.path.getsize(cover_file) > 0
         except Exception as cover_err:
-            logger.warning(f"Instagram cover unavailable for send-with ({cover_err}).")
-        if not got_cover and needs_cover:
+            logger.warning(f"Instagram cover unavailable for send-with ({cover_err}); using a video frame.")
+        if not got_cover:
             await loop.run_in_executor(None, media_processor.extract_thumbnail, session.file_path, cover_file)
             got_cover = os.path.exists(cover_file) and os.path.getsize(cover_file) > 0
-        if needs_cover and not got_cover:
+        if not got_cover:
             raise RuntimeError("Could not obtain a cover image.")
 
-        # Small Telegram thumbnail (JPEG, <=320px, <200KB) from the cover, if we have one
-        thumb_file = None
-        if got_cover:
-            try:
-                thumb_file = os.path.join(tmp_dir, "thumb.jpg")
-                await loop.run_in_executor(None, make_telegram_thumb, cover_file, thumb_file)
-            except Exception as thumb_err:
-                logger.warning(f"Thumbnail creation failed ({thumb_err}).")
-                thumb_file = None
+        # Small Telegram thumbnail (JPEG, <=320px, <200KB) from the cover
+        thumb_file = os.path.join(tmp_dir, "thumb.jpg")
+        await loop.run_in_executor(None, make_telegram_thumb, cover_file, thumb_file)
 
         caption_kwargs = {}
         if with_caption:
             caption_kwargs = {"caption": build_bold_caption(session.caption), "parse_mode": "HTML"}
 
-        if needs_cover:
-            # Put the cover as the first frame so Telegram shows it as the video thumbnail
-            framed_video = os.path.join(tmp_dir, "video_framed.mp4")
-            async with FFMPEG_SEMAPHORE:
-                send_path = await loop.run_in_executor(None, embed_cover_first_frame, session.file_path, cover_file, framed_video)
-            if not send_path:
-                unique_video = os.path.join(tmp_dir, "video_thumb.mp4")
-                send_path = await loop.run_in_executor(None, make_unique_video_copy, session.file_path, unique_video)
+        # Put the cover as the first frame so Telegram shows it as the video thumbnail
+        framed_video = os.path.join(tmp_dir, f"video_framed.{ext}")
+        async with FFMPEG_SEMAPHORE:
+            send_path = await loop.run_in_executor(None, embed_cover_first_frame, session.file_path, cover_file, framed_video)
+        if not send_path:
+            unique_video = os.path.join(tmp_dir, f"video_thumb.{ext}")
+            send_path = await loop.run_in_executor(None, make_unique_video_copy, session.file_path, unique_video)
 
+        try:
+            await status_msg.edit_text("📤 Uploading…")
+        except Exception:
+            pass
+
+        with open(send_path, "rb") as vf, open(thumb_file, "rb") as tf:
+            cf = open(cover_file, "rb") if action == "sendcover" else None
             try:
-                await status_msg.edit_text("📤 Uploading…")
-            except Exception:
-                pass
-
-            with open(send_path, "rb") as vf:
-                tf = open(thumb_file, "rb") if thumb_file else None
-                cf = open(cover_file, "rb") if action == "sendcover" else None
-                try:
-                    extra = {}
-                    if tf:
-                        extra["thumbnail"] = tf
-                    if cf:
-                        extra["cover"] = cf
-                    await query.message.reply_video(
-                        video=vf, supports_streaming=True, **extra, **caption_kwargs
-                    )
-                finally:
-                    if tf:
-                        tf.close()
-                    if cf:
-                        cf.close()
-
-        else:
-            ext = "mp4" if action == "sendmp4" else "mkv"
-            doc_path = os.path.join(tmp_dir, f"video.{ext}")
-            async with FFMPEG_SEMAPHORE:
-                await loop.run_in_executor(None, make_document_copy, session.file_path, doc_path, ext)
-
-            try:
-                await status_msg.edit_text("📤 Uploading…")
-            except Exception:
-                pass
-
-            file_name = f"{safe_file_stem(session.title)}.{ext}"
-            with open(doc_path, "rb") as df:
-                tf = open(thumb_file, "rb") if thumb_file else None
-                try:
-                    extra = {"thumbnail": tf} if tf else {}
-                    await query.message.reply_document(
-                        document=df,
-                        filename=file_name,
-                        disable_content_type_detection=True,
-                        **extra,
-                        **caption_kwargs,
-                    )
-                finally:
-                    if tf:
-                        tf.close()
+                extra = {"cover": cf} if cf else {}
+                await query.message.reply_video(
+                    video=vf, thumbnail=tf, supports_streaming=True, **extra, **caption_kwargs
+                )
+            finally:
+                if cf:
+                    cf.close()
 
     except Exception as e:
         logger.error(f"Send-with action '{action}' failed for session {session.session_id}: {e}", exc_info=True)
