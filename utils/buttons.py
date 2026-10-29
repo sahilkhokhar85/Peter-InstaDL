@@ -97,6 +97,12 @@ def build_video_action_keyboard(session_id: str) -> InlineKeyboardMarkup:
             make_button("🖼 Thumbnail", callback_data=f"act_{session_id}_thumb"),
         ],
         [
+            make_button("🎞 Send with Thumbnail", callback_data=f"act_{session_id}_sendthumb"),
+        ],
+        [
+            make_button("🖼 Send with Cover", callback_data=f"act_{session_id}_sendcover"),
+        ],
+        [
             make_button("🗑 Remove buttons", callback_data=f"act_{session_id}_remove", style="danger"),
         ],
         [
