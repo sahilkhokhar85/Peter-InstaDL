@@ -3,6 +3,7 @@ Media action inline button callback query handlers.
 """
 import os
 import uuid
+import html
 import shutil
 import asyncio
 import logging
@@ -24,6 +25,37 @@ logger = logging.getLogger("handlers.callbacks")
 
 # Limit heavy FFmpeg tasks concurrency to 2 simultaneous jobs
 FFMPEG_SEMAPHORE = asyncio.Semaphore(2)
+
+
+CAPTION_SUFFIX = "\n\n💬By : @RudraBlaze"
+CAPTION_LIMIT = 1024  # Telegram caption limit (visible characters)
+
+
+def build_bold_caption(raw_caption: str) -> str:
+    """Return the bold HTML caption (original caption + credit line), within Telegram's limit."""
+    raw = (raw_caption or "").strip() or "no caption"
+    max_raw = CAPTION_LIMIT - len(CAPTION_SUFFIX)
+    if len(raw) > max_raw:
+        raw = raw[: max_raw - 1].rstrip() + "…"
+    return f"<b>{html.escape(raw)}{html.escape(CAPTION_SUFFIX)}</b>"
+
+
+def message_has_caption(message) -> bool:
+    """True when the video message currently shows a caption (i.e. Caption button was used)."""
+    return bool(getattr(message, "caption", None))
+
+
+def make_telegram_thumb(src: str, dst: str) -> str:
+    """Create a Telegram-compliant video thumbnail: JPEG, max 320x320, under 200 KB."""
+    for quality in (4, 8, 14, 20, 28):
+        media_processor.run_ffmpeg([
+            "-y", "-i", src,
+            "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
+            "-frames:v", "1", "-q:v", str(quality), dst,
+        ])
+        if os.path.exists(dst) and 0 < os.path.getsize(dst) < 200 * 1024:
+            return dst
+    raise RuntimeError("Could not create a thumbnail under 200 KB.")
 
 
 async def media_action_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,11 +137,11 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
         return
 
     elif action == "caption":
-        raw_caption = (session.caption or "").strip()
-        if raw_caption:
-            formatted_caption = f"{raw_caption}\n\n💬By : @RudraBlaze"
-        else:
-            formatted_caption = "no caption\n\n💬By : @RudraBlaze"
+        if message_has_caption(query.message):
+            await query.answer("✅ Caption already added")
+            return
+
+        formatted_caption = build_bold_caption(session.caption)
 
         try:
             if not session.telegram_chat_id or not session.telegram_message_id:
@@ -120,6 +152,7 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
                 chat_id=session.telegram_chat_id,
                 message_id=session.telegram_message_id,
                 caption=formatted_caption,
+                parse_mode="HTML",
                 reply_markup=kb,
             )
             await query.answer("✅ Caption updated")
@@ -136,6 +169,12 @@ async def media_action_callback_handler(update: Update, context: ContextTypes.DE
         session.is_processing = True
 
     await query.answer()
+
+    # Send the video again with a custom thumbnail / cover
+    if action in ("sendthumb", "sendcover"):
+        with_caption = message_has_caption(query.message)
+        asyncio.create_task(run_send_with_action(query, session, action, with_caption))
+        return
 
     # Cover actions (thumbnail + quality buttons) use their own flow
     if action == "thumb" or (action.startswith("cvq") and action[3:].isdigit()):
@@ -247,6 +286,97 @@ async def run_cover_action(query, session: MediaSession, index: int = 0):
                 pass
         if tmp_dir and os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def run_send_with_action(query, session: MediaSession, action: str, with_caption: bool):
+    """Send the video again with the Instagram cover as Telegram thumbnail or cover.
+
+    The bold caption is attached only if the Caption button was used on the video message.
+    """
+    status_msg = None
+    tmp_dir = os.path.join("/tmp", "ytdlp_downloads", f"send_{uuid.uuid4().hex[:8]}")
+    loop = asyncio.get_running_loop()
+
+    try:
+        status_msg = await query.message.reply_text("⏳ Preparing…")
+
+        # Make sure the video file exists (auto re-download after cleanup/reboot)
+        if not session.file_path or not os.path.exists(session.file_path):
+            if not session.url:
+                raise RuntimeError("Session source file missing and media URL unknown.")
+            redl_task_id = uuid.uuid4().hex[:8]
+            redl_dir = os.path.join("/tmp", "ytdlp_downloads", redl_task_id)
+            task_manager.register_task(redl_task_id, session.uid)
+            try:
+                restored_path, _, _ = await ytdlp_download(
+                    url=session.url,
+                    dest_dir=redl_dir,
+                    task_id=redl_task_id,
+                    msg=status_msg,
+                    uid=session.uid,
+                )
+                session.file_path = restored_path
+                session_manager.save_session_state()
+            finally:
+                task_manager.remove_task(redl_task_id)
+
+        os.makedirs(tmp_dir, exist_ok=True)
+        cover_file = os.path.join(tmp_dir, "cover.jpg")
+
+        # Best Instagram cover; fall back to a frame from the video itself
+        got_cover = False
+        try:
+            if session.url:
+                options = COVER_CACHE.get(session.session_id)
+                if not options:
+                    options = await loop.run_in_executor(None, get_cover_options, session.url, session.uid)
+                    _cache_cover_options(session.session_id, options)
+                await loop.run_in_executor(None, download_cover_image, options[0]["url"], cover_file)
+                got_cover = os.path.exists(cover_file) and os.path.getsize(cover_file) > 0
+        except Exception as cover_err:
+            logger.warning(f"Instagram cover unavailable for send-with ({cover_err}); using a video frame.")
+        if not got_cover:
+            await loop.run_in_executor(None, media_processor.extract_thumbnail, session.file_path, cover_file)
+        if not os.path.exists(cover_file) or os.path.getsize(cover_file) == 0:
+            raise RuntimeError("Could not obtain a cover image.")
+
+        caption_kwargs = {}
+        if with_caption:
+            caption_kwargs = {"caption": build_bold_caption(session.caption), "parse_mode": "HTML"}
+
+        try:
+            await status_msg.edit_text("📤 Uploading…")
+        except Exception:
+            pass
+
+        if action == "sendthumb":
+            thumb_file = os.path.join(tmp_dir, "thumb.jpg")
+            await loop.run_in_executor(None, make_telegram_thumb, cover_file, thumb_file)
+            with open(session.file_path, "rb") as vf, open(thumb_file, "rb") as tf:
+                await query.message.reply_video(
+                    video=vf, thumbnail=tf, supports_streaming=True, **caption_kwargs
+                )
+        else:
+            with open(session.file_path, "rb") as vf, open(cover_file, "rb") as cf:
+                await query.message.reply_video(
+                    video=vf, cover=cf, supports_streaming=True, **caption_kwargs
+                )
+
+    except Exception as e:
+        logger.error(f"Send-with action '{action}' failed for session {session.session_id}: {e}", exc_info=True)
+        try:
+            await query.message.reply_text("❌ Unable to send the video. Please try again.")
+        except Exception:
+            pass
+
+    finally:
+        session.is_processing = False
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def run_media_action(update: Update, query, session: MediaSession, action: str):
